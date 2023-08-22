@@ -51,7 +51,17 @@ class AsmParser(GenericParser):
         n = self.next_token()
 
         if n.type == TokenType.ID:
-            if self.lookahead_token(TokenType.SET):
+            if self.lookahead_token(TokenType.SET, "=") and self.lookahead_token(TokenType.COLON, n = 2):
+                self.next_token(TokenType.SET, "=")
+                self.next_token(TokenType.COLON)
+                macro = ""
+                
+                while n.pos.line == self.lookahead_line():
+                    macro += self.next_token().value
+                
+                return MacroNode(n.pos, n.value, macro)
+                
+            elif self.lookahead_token(TokenType.SET):
                 op = self.next_token(TokenType.SET)
                 if op.value == "=":
                     if self.lookahead_token(TokenType.ID) and self.lookahead_token(TokenType.LBRACK, None, 2):

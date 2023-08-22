@@ -1,5 +1,6 @@
 import ast
 import operator
+from typing import Any, Callable, Type
 
 from .util import Position
 from .tokens import TokenType
@@ -7,12 +8,12 @@ from .error import Error
 
 
 class Expression:
-    variables: dict[str] = {}
+    variables: dict[str, Any] = {}
 
     TOKENS: TokenType = TokenType.ID | TokenType.STRING | TokenType.SET | TokenType.OPERATOR | TokenType.NUMBER | \
                         TokenType.LPAREN | TokenType.RPAREN | TokenType.SEMICOLON
 
-    OPERATORS: dict[type] = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    OPERATORS: dict[Type[ast.AST], Callable] = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
                              ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Pow: operator.pow,
                              ast.USub: operator.neg, ast.Not: operator.not_, ast.Mod: operator.mod,
                              ast.BitXor: operator.xor, ast.And: operator.and_, ast.Or: operator.or_,
@@ -94,6 +95,8 @@ class Expression:
             return value
         elif isinstance(node, ast.Name):
             return Expression.variables[node.id]
+        elif isinstance(node, ast.Subscript):
+            return Expression.op_eval(node.value)[Expression.op_eval(node.slice)]
         elif isinstance(node, ast.Expr):
             return Expression.op_eval(node.value)
         else:

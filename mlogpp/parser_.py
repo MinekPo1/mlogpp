@@ -1,9 +1,12 @@
 import genericpath
+from typing import Callable
 
 from .tokens import TokenType, Token
 from .error import Error
 from .node import *
 from .generic_parser import GenericParser
+
+from .asm.parser_ import AsmParser
 
 
 class Parser(GenericParser):
@@ -36,7 +39,7 @@ class Parser(GenericParser):
                                            VariableValue(Type.from_code(tok.value), name.value), None)
 
                 # block statement (while, function, ...)
-                elif tok.value in Token.BLOCK_STATEMENTS:
+                elif tok.value in Token.BLOCK_STATEMENTS or tok.value in Token.SPECIFIERS:
                     self.prev_token()
                     return self.parse_BlockStatement()
 
@@ -48,9 +51,9 @@ class Parser(GenericParser):
                             # check if there is a value on the same line
                             if self.lookahead_line() == tok.pos.line:
                                 value = self.parse_Value()
-                                return ReturnNode(tok.pos + value.get_pos(), self.function_stack[-1], value)
+                                return ReturnNode(tok.pos + value.get_pos(), value)
 
-                            return ReturnNode(tok.pos, self.function_stack[-1], None)
+                            return ReturnNode(tok.pos, None)
 
                         Error.unexpected_token(tok)
 
@@ -172,7 +175,11 @@ class Parser(GenericParser):
             The parsed block statement.
         """
 
+        spec = "call"
         tok = self.next_token(TokenType.KEYWORD)
+        if tok.value in Token.SPECIFIERS:
+            spec = tok.value
+            tok = self.next_token(TokenType.KEYWORD)
         if tok.value != "function":
             self.next_token(TokenType.LPAREN)
 
@@ -258,10 +265,13 @@ class Parser(GenericParser):
 
                 self.next_token(TokenType.LBRACE)
                 self.function_stack.append(name.value)
-                code = self.parse_CodeBlock(name.value)
+                if spec == "__asm":
+                    code = self.parse_ASMBlock(name.value)
+                else:
+                    code = self.parse_CodeBlock(name.value)
                 self.function_stack.pop(-1)
 
-                return FunctionNode(tok.pos, name.value, params, type_, code)
+                return FunctionNode(tok.pos, name.value, params, type_, code, spec)
 
     def parse_CodeBlock(self, name: str | None, end_at_rbrace: bool = True):
         """
@@ -284,6 +294,36 @@ class Parser(GenericParser):
             code.append(self.parse_Statement())
 
         return CodeBlockNode(code, name)
+
+    def parse_ASMBlock(self, name: str | None, end_at_rbrace: bool = True):
+        """
+        Invoke the AsmParser on a block of assembly.
+        
+        Args:
+            name: Name of the code block.
+            end_at_rbrace: Break at a right bracket.
+
+        Returns:
+            The parsed block of code.
+        """
+        block_tokens: list[Token] = []
+        
+        depth = 1
+        while self.has_token():
+            if self.lookahead_token(TokenType.LBRACE) and end_at_rbrace:
+                depth += 1
+            if self.lookahead_token(TokenType.RBRACE) and end_at_rbrace:
+                depth -= 1
+                if depth == 0:
+                    self.next_token()
+                    break
+
+            block_tokens.append(self.next_token())
+
+        out: CodeBlockNode = AsmParser().parse(block_tokens)
+        out.name = name
+        return out
+
 
     def parse_funcArgVars(self) -> list[tuple[str, Type]]:
         """
@@ -367,7 +407,7 @@ class Parser(GenericParser):
 
         return values
 
-    def parse_binaryOp(self, operators: tuple, value_get: callable) -> BinaryOpNode:
+    def parse_binaryOp(self, operators: tuple, value_get: Callable) -> BinaryOpNode:
         """
         Parse a binary operator.
 

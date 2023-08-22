@@ -53,9 +53,12 @@ class Token:
         "end",
         "else"
     )
+    SPECIFIERS = (
+        "constexpr", "inline", "__asm",
+    )
 
     # reserved keywords
-    KEYWORDS = TYPES + STATEMENTS
+    KEYWORDS = TYPES + STATEMENTS + SPECIFIERS
 
     def __init__(self, type_: TokenType, value: str, pos: Position):
         self.type = type_

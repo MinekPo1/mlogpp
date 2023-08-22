@@ -502,6 +502,13 @@ class Natives:
             (Param.OUTPUT, Type.NUM),
             (Param.INPUT, Type.NUM),
             (Param.INPUT, Type.NUM)
+        ),
+
+        "jump": (
+            (Param.INPUT, Type.NUM),
+            (Param.CONFIG, Type.ANY),
+            (Param.INPUT, Type.NUM),
+            (Param.INPUT, Type.NUM),
         )
     }
 

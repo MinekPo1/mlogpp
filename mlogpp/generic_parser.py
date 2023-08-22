@@ -3,7 +3,7 @@ from .error import Error
 from .expression import Expression
 from .util import Position
 from .lexer import Lexer
-
+from .base_node import CodeBlockNode
 
 class GenericParser:
     """
@@ -20,7 +20,7 @@ class GenericParser:
 
     const_expressions: bool
 
-    def parse(self, tokens: list[Token]):
+    def parse(self, tokens: list[Token]) -> CodeBlockNode:
         """
         Parse tokens into an AST.
 

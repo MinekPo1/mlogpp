@@ -1,3 +1,6 @@
+from typing import Literal
+from contextvars import ContextVar
+
 from .util import Position
 from .instruction import *
 from .value import *
@@ -7,111 +10,10 @@ from .function import Function
 from .functions import Natives, Param, PRECALC
 from .error import Error
 from . import constants
+from .base_node import BaseFuncNode, Node, CodeBlockNode
 
 
-class Node:
-    """
-    Base node class.
-    """
-
-    pos: Position
-
-    def __init__(self, pos: Position):
-        self.pos = pos
-
-    def get_pos(self) -> Position:
-        """
-        Get position of the node.
-
-        Returns:
-            Position of the node.
-        """
-
-        return self.pos
-
-    def __str__(self):
-        """
-        Convert the node to a string, debug only.
-
-        Returns:
-            A string, similar to the unparsed mlog++ code.
-        """
-
-        return "NODE"
-
-    def generate(self) -> Instruction | Instructions:
-        """
-        Generate the node.
-
-        Returns:
-            The generated code.
-        """
-
-        return Instructions()
-
-    def get(self) -> tuple[Instruction | Instructions, Value]:
-        """
-        Get the node's value and code to obtain it.
-
-        Returns:
-            A tuple containing the code to obtain the value and the value.
-        """
-
-        return Instructions(), NullValue()
-
-    def precalc(self) -> Value | None:
-        """
-        Attempt to precalculate the node's value.
-
-        Returns:
-            The value if succeeded, else None.
-        """
-
-        return None
-
-
-class CodeBlockNode(Node):
-    """
-    Block of code.
-    """
-
-    code: list[Node]
-    name: str | None
-
-    def __init__(self, code: list[Node], name: str | None):
-        super().__init__(Position(0, 0, 0, "", ""))
-
-        self.code = code
-        self.name = name
-
-    def __str__(self):
-        string = "{\n"
-        for node in self.code:
-            string += str(node) + "\n"
-        return string + "}"
-
-    def generate(self) -> Instruction | Instructions:
-        ins = Instructions()
-
-        for node in self.code:
-            ins += node.generate()
-
-        return ins
-
-    def push_scope(self) -> None:
-        """
-        Push this node's scope to the scope stack.
-        """
-
-        Scopes.push(self.name)
-
-    @staticmethod
-    def pop_scope() -> None:
-        """
-        Pop this node's scope from the scope stack.
-        """
-
-        Scopes.pop()
+_function_ret: ContextVar[tuple[str, VariableValue, bool] | None] = ContextVar("_function_ret", default = None)
 
 
 class DeclarationNode(Node):
@@ -470,36 +372,56 @@ class CallNode(Node):
         # check if the function is defined
         if not isinstance(fun := Scopes.get(self.name), Function):
             Error.undefined_function(self, self.name)
+            assert False  # idk why this is necessary, but my typechecker freaks out without this
 
         # check if the parameter count is correct
         if len(self.params) != len(fun.params):
             Error.invalid_arg_count(self, len(self.params), len(fun.params))
 
-        # save the return value for later use
-        if fun.return_type != Type.NULL:
-            self.return_value = VariableValue(fun.return_type, f"__f_{self.name}_retv")
 
-        # generate every parameter
+        all_args_const = True
+        # check parameters
         for i, param in enumerate(self.params):
             param_code, param_value = param.get()
+
+            if len(param_code):
+                all_args_const = False
 
             # check if the parameter is of the correct type
             if param_value.type != fun.params[i][1]:
                 Error.incompatible_types(self, param_value.type, fun.params[i][1])
 
+        inline = False
+        suffix = ""
+        if fun.specifier in ("inline", "__asm") or (fun.specifier == "constexpr" and all_args_const):
+            inline = True
+            suffix = "_"+Gen.scope_name()
+        
+        # save the return value for later use
+        if fun.return_type != Type.NULL:
+            self.return_value = VariableValue(fun.return_type, f"__f_{self.name}{suffix}_retv")
+        
+        # generate every parameter
+        for i, param in enumerate(self.params):
+            param_code, param_value = param.get()
+            
             code += param_code
             code += MInstruction(MInstructionType.SET, [
-                VariableValue(fun.params[i][1], Scope(self.name).rename(fun.params[i][0])),
+                VariableValue(fun.params[i][1], Scope(f"{self.name}{suffix}").rename(fun.params[i][0])),
                 param_value
             ])
 
-        code += MInstruction(MInstructionType.OP, [
-            "add",
-            VariableValue(Type.NUM, f"__f_{self.name}_ret"),
-            VariableValue(Type.NUM, "@counter"),
-            NumberValue(1)
-        ])
-        code += MppInstructionJump(f"__f_{self.name}")
+        if inline:
+            code += fun.node.generate_func(suffix, True)
+            code += MppInstructionLabel(f"__f_{self.name}{suffix}_ret")
+        else:
+            code += MInstruction(MInstructionType.OP, [
+                "add",
+                VariableValue(Type.NUM, f"__f_{self.name}_ret"),
+                VariableValue(Type.NUM, "@counter"),
+                NumberValue(1)
+            ])
+            code += MppInstructionJump(f"__f_{self.name}")
 
         return code
 
@@ -850,39 +772,52 @@ class ReturnNode(Node):
     Return from a function.
     """
 
-    func: str
     value: Node | None
 
-    def __init__(self, pos: Position, func: str, value: Node | None):
+    def __init__(self, pos: Position, value: Node | None):
         super().__init__(pos)
 
-        self.func = func
         self.value = value
 
     def generate(self) -> Instruction | Instructions:
+        
+        ret_tuple = _function_ret.get()
+
+        # check if the context var was set (just in case)
+        if ret_tuple is None:
+            Error.undefined_function(self, "<UNKNOWN>")
+            # TODO: Improve error message
+            assert False
+
+        ret_addr, ret_var, inline = ret_tuple
+        
         # check if it returns a value
         if self.value is None:
+            if inline:
+                return Instructions() + MppInstructionJump(ret_addr)
             return Instructions() + MInstruction(MInstructionType.SET, [
                 VariableValue(Type.NUM, "@counter"),
-                VariableValue(Type.NUM, f"__f_{self.func}_ret")
+                VariableValue(Type.NUM, ret_addr)
             ])
 
         value_code, value = self.value.get()
 
-        # check if the function returned from exists
-        if not isinstance(fun := Scopes.get(self.func), Function):
-            Error.undefined_function(self, self.name)
-
         # check if the returned value is of the correct type
-        if value.type != fun.return_type:
-            Error.incompatible_types(self, value.type, fun.return_type)
+        if value.type != ret_var.type:
+            Error.incompatible_types(self, value.type, ret_var)
+
+        if inline:
+            return value_code + MInstruction(MInstructionType.SET, [
+                ret_var,
+                value
+            ]) + MppInstructionJump(ret_addr)
 
         return value_code + MInstruction(MInstructionType.SET, [
-            VariableValue(value.type, f"__f_{self.func}_retv"),
+            ret_var,
             value
         ]) + MInstruction(MInstructionType.SET, [
             VariableValue(Type.NUM, "@counter"),
-            VariableValue(Type.NUM, f"__f_{self.func}_ret")
+            VariableValue(Type.NUM, ret_addr)
         ])
 
 
@@ -1122,7 +1057,7 @@ class RangeNode(LoopNode):
         return code
 
 
-class FunctionNode(Node):
+class FunctionNode(BaseFuncNode):
     """
     Function definition.
     """
@@ -1131,44 +1066,66 @@ class FunctionNode(Node):
     params: list[tuple[str, Type]]
     return_type: Type
     code: CodeBlockNode
+    specifier: Literal["call", "constexpr", "inline", "__asm"]
 
-    def __init__(self, pos: Position, name: str, params: list[tuple[str, Type]], return_type: Type, code: CodeBlockNode):
+    def __init__(self, pos: Position, name: str, params: list[tuple[str, Type]], return_type: Type, code: CodeBlockNode, specifier: Literal["call", "constexpr", "inline", "__asm"] = "call"):
         super().__init__(pos)
 
         self.name = name
         self.params = params
         self.return_type = return_type
         self.code = code
+        self.specifier = specifier
 
     def __str__(self):
         return f"function {self.name} ({', '.join(map(lambda t: t[1].name + ' ' + t[0], self.params))}) {self.code}"
 
     def generate(self) -> Instruction | Instructions:
         # declare the function
-        Scopes.add(Function(self.name, self.params, self.return_type))
+        Scopes.add(Function(self.name, self.params, self.return_type, self.specifier, self))
 
+        if self.specifier in ("call", "constexpr"):
+            # create a callable version of the function
+            code = Instructions()
+            code += MppInstructionJump(f"__f_{self.name}_end")
+            code += MppInstructionLabel(f"__f_{self.name}")
+            
+            code += self.generate_func()
+            
+            code += MInstruction(MInstructionType.SET, [
+                VariableValue(Type.NUM, "@counter"),
+                VariableValue(Type.NUM, f"__f_{self.name}_ret")
+            ])
+            code += MppInstructionLabel(f"__f_{self.name}_end")
+            return code
+        return Instructions()
+
+    def generate_func(self, suffix: str = "", inline = False) -> Instruction | Instructions:
         code = Instructions()
 
-        code += MppInstructionJump(f"__f_{self.name}_end")
-        code += MppInstructionLabel(f"__f_{self.name}")
-
-        Scopes.push(self.name)
+        Scopes.push(f"{self.name}{suffix}")
         # declare all parameters
         for name, type_ in self.params:
-            Scopes.add(VariableValue(type_, Scopes.rename(name, True)))
+            Scopes.add(VariableValue(type_, Scopes.rename(f"{name}", True)))
 
         self.code.push_scope()
+        
+        token = _function_ret.set((
+                f"__f_{self.name}{suffix}_ret",
+                VariableValue(self.return_type, f"__f_{self.name}{suffix}_retv"),
+                inline
+        ))
+
+        if self.specifier == "__asm":
+            code += MppInstructionLabel(f"ret  =: __f_{self.name}{suffix}_ret")
+            code += MppInstructionLabel(f"retv =: __f_{self.name}{suffix}_retv")
 
         code += self.code.generate()
+
+        _function_ret.reset(token)
 
         self.code.pop_scope()
 
         Scopes.pop()
-
-        code += MInstruction(MInstructionType.SET, [
-            VariableValue(Type.NUM, "@counter"),
-            VariableValue(Type.NUM, f"__f_{self.name}_ret")
-        ])
-        code += MppInstructionLabel(f"__f_{self.name}_end")
 
         return code

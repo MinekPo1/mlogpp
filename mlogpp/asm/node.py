@@ -2,76 +2,7 @@ from ..util import Position
 from ..instruction import *
 from ..value import *
 from .. import constants
-
-
-class Node:
-    """
-    Base node class.
-    """
-
-    pos: Position
-
-    def __init__(self, pos: Position):
-        self.pos = pos
-
-    def get_pos(self) -> Position:
-        """
-        Get position of the node.
-
-        Returns:
-            Position of the node.
-        """
-
-        return self.pos
-
-    def __str__(self):
-        """
-        Convert the node to a string, debug only.
-
-        Returns:
-            A string, similar to the unparsed mlog++ code.
-        """
-
-        return "NODE"
-
-    def generate(self) -> Instruction | Instructions:
-        """
-        Generate the node.
-
-        Returns:
-            The generated code.
-        """
-
-        return Instructions()
-
-
-class CodeBlockNode(Node):
-    """
-    Block of code.
-    """
-
-    code: list[Node]
-    name: str | None
-
-    def __init__(self, code: list[Node], name: str | None):
-        super().__init__(Position(0, 0, 0, "", ""))
-
-        self.code = code
-        self.name = name
-
-    def __str__(self):
-        string = "{\n"
-        for node in self.code:
-            string += str(node) + "\n"
-        return string + "}"
-
-    def generate(self) -> Instruction | Instructions:
-        ins = Instructions()
-
-        for node in self.code:
-            ins += node.generate()
-
-        return ins
+from ..base_node import Node, CodeBlockNode
 
 
 class AssignmentNode(Node):
@@ -251,6 +182,23 @@ class UnaryOpNode(Node):
                 return MInstruction(MInstructionType.OP, ["not", self.result, self.value, "_"])
 
 
+class MacroNode(Node):
+    """
+    Macro.
+    """
+
+    name: str
+    value: str
+
+    def __init__(self, pos: Position, name: str, value: str):
+        super().__init__(pos)
+
+        self.name = name
+        self.value = value
+
+    def generate(self) -> Instruction | Instructions:
+        return MppInstructionMacro(self.name, self.value)
+
 class LabelNode(Node):
     """
     Label.
@@ -265,7 +213,6 @@ class LabelNode(Node):
 
     def generate(self) -> Instruction | Instructions:
         return MppInstructionLabel(self.name)
-
 
 class JumpNode(Node):
     """

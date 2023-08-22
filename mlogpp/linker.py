@@ -1,4 +1,5 @@
 from .instruction import *
+from .expression import Expression
 
 
 class Linker:
@@ -20,43 +21,38 @@ class Linker:
 
         # label at the start of the code
         labels = {"start": 0}
+        macros: dict[str, str] = {}
 
-        # find labels
-        line = 0
+        # find labels and process macros
+
+        instrs: list[str] = []
         for ins in code.iter():
-            # generate the instruction
-            generated = str(ins)
+            if isinstance(ins, MppInstructionLabel):
+                labels[ins.name] = len(instrs)
+                continue
+            
+            if isinstance(ins, MppInstructionMacro):
+                if ins.value.startswith(":"):
+                    Expression.variables["here_ptr"] = len(instrs)
+                    Expression.variables["labels"] = labels
+                    Expression.variables["macros"] = macros
+                    val = Expression.exec(ins.pos, ins.value.removeprefix(":"))
 
-            if generated.strip():
-                # check if the line is a label
-                if generated.endswith(":"):
-                    labels[generated[:-1]] = line
+                    if isinstance(val, list):
+                        val = " ".join(str(i) for i in val)
+                    else:
+                        val = str(val)
 
                 else:
-                    line += 1
+                    val = ins.value
+                macros[ins.name] = val
+                continue
 
-        # generate instructions and skip labels
-        code = [ins for ins in (str(ins) for ins in code.iter()) if not ins.endswith(":")]
+            if not str(ins):
+                continue
 
-        output_code = ""
-        for i, generated in enumerate(code):
-            # resolve jump addressed
-            if generated.startswith("jump "):
-                spl = generated.split(" ", 2)
-                jump_to = labels.get(spl[1])
-                if jump_to is None:
-                    InternalError.label_not_found(spl[1])
+            instrs.append(" ".join( macros.get(i, i) for i in str(ins).split() ))
 
-                # wrap around to 0 if address is larger than last instruction
-                if jump_to >= line:
-                    jump_to = 0
-
-                if i == len(code) - 1 and jump_to == 0:
-                    continue
-
-                output_code += spl[0] + " " + str(jump_to) + " " + spl[2] + "\n"
-
-            else:
-                output_code += generated + "\n"
+        output_code = "\n".join(" ".join(str(labels.get(word, word)) for word in line.split()) for line in instrs)
 
         return output_code.strip()

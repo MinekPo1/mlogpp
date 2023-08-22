@@ -1,16 +1,49 @@
 from __future__ import annotations
 
 import enum
+from typing import TYPE_CHECKING
 
+from .util import Position
 from .value import *
 from .error import InternalError
 from .functions import Natives, Param
+
+from functools import wraps
+
+if TYPE_CHECKING:
+    from .node import Node
+
+_Node: 'Node' | None = None
+
+# see https://stackoverflow.com/q/7336802/12469275
+# this way seems the best to me
+def get_Node() -> 'Node':
+    global _Node
+    if _Node is not None:
+        return _Node
+    from .node import Node as _Node
+    return _Node
 
 
 class Instruction:
     """
     An instruction that will be directly converted to Mindustry logic.
     """
+
+    pos: Position
+
+    def __init__(self):
+        self.pos = get_Node()._from_pos.get()
+
+    def __init_subclass__(cls):
+        copy = cls.copy
+        @wraps(cls.copy)
+        def wrapper(self):
+            token = get_Node()._from_pos.set(self.pos)
+            out = copy(self)
+            get_Node()._from_pos.reset(token)
+            return out
+        cls.copy = wrapper
 
     def __add__(self, other):
         """
@@ -99,6 +132,9 @@ class NoopInstruction(Instruction):
     No operation instruction.
     """
 
+    def __init__(self):
+        self.pos = Position(0, 0, 0, "", "")
+
     pass
 
 
@@ -162,6 +198,8 @@ class MInstruction(Instruction):
     __match_args__ = ("type", "params")
 
     def __init__(self, type_: MInstructionType, params: list[str | int | float | Value]):
+        super().__init__()
+
         self.type = type_
 
         # convert all parameters to strings
@@ -234,6 +272,7 @@ class MppInstructionLabel(Instruction):
     name: str
 
     def __init__(self, name: str):
+        super().__init__()
         self.name = str(name)
 
     def __str__(self):
@@ -246,6 +285,28 @@ class MppInstructionLabel(Instruction):
         return MppInstructionLabel(self.name)
 
 
+class MppInstructionMacro(Instruction):
+    """
+    Macro instruction
+    """
+    name: str
+    value: str
+    
+    def __init__(self, name: str, value: str):
+        super().__init__()
+        self.name = str(name)
+        self.value = value
+
+    def __str__(self):
+        return f"{self.name} =: {self.value}"
+
+    def __repr__(self):
+        return f"MppInstructionMacro({self.name!r}, {self.value!r})"
+
+    def copy(self):
+        return MppInstructionMacro(self.name, self.value)
+
+
 class MppInstructionJump(Instruction):
     """
     Jump instruction.
@@ -254,6 +315,7 @@ class MppInstructionJump(Instruction):
     label: str
 
     def __init__(self, label: str):
+        super().__init__()
         self.label = str(label)
 
     def __str__(self):
@@ -277,6 +339,7 @@ class MppInstructionOJump(Instruction):
     op2: str
 
     def __init__(self, label: str, op1: str | Value, op: str, op2: str | Value):
+        super().__init__()
         self.label = str(label)
         self.op1 = str(op1)
         self.op = str(op)

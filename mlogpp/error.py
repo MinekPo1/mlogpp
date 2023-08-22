@@ -1,8 +1,12 @@
 import enum
+from typing import TYPE_CHECKING
 
 from .formatting import Format
 from .util import Position, sanitize
 
+if TYPE_CHECKING:
+	from .base_node import Node
+	from .tokens import Token
 
 class Error(Exception):
     """
